@@ -17,6 +17,8 @@ from utilities import Utilities
 
 
 class StreamEventHandler(AsyncAgentEventHandler[str]):
+# class StreamEventHandler(AsyncAgentEventHandler):
+    
     """Handle LLM streaming events and tokens."""
 
     def __init__(self, functions: AsyncFunctionTool, project_client: AIProjectClient, utilities: Utilities) -> None:

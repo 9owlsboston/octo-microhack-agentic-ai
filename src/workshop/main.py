@@ -14,6 +14,7 @@ from azure.ai.projects.models import (
 )
 from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
+
 from sales_data import SalesData
 from stream_event_handler import StreamEventHandler
 from terminal_colors import TerminalColors as tc
@@ -38,6 +39,8 @@ toolset = AsyncToolSet()
 sales_data = SalesData()
 utilities = Utilities()
 
+INSTRUCTIONS_FILE_ROOT_PATH = os.environ["INSTRUCTIONS_FILE_ROOT_PATH"]
+
 project_client = AIProjectClient.from_connection_string(
     credential=DefaultAzureCredential(),
     conn_str=PROJECT_CONNECTION_STRING,
@@ -49,35 +52,49 @@ functions = AsyncFunctionTool(
     }
 )
 
-# INSTRUCTIONS_FILE = "instructions/instructions_function_calling.txt"
-# INSTRUCTIONS_FILE = "instructions/instructions_code_interpreter.txt"
-# INSTRUCTIONS_FILE = "instructions/instructions_file_search.txt"
-# INSTRUCTIONS_FILE = "instructions/instructions_bing_grounding.txt"
+# Define all instruction files
+INSTRUCTION_FILES = [
+    "instructions_function_calling.txt",
+    "instructions_code_interpreter.txt",
+    "instructions_file_search.txt",
+    "instructions_bing_grounding.txt"
+]
+# Set to True to enable specific instruction files
+ENABLED_INSTRUCTIONS = {
+    "instructions_function_calling.txt": True,
+    "instructions_code_interpreter.txt": True,
+    "instructions_file_search.txt": True,
+    "instructions_bing_grounding.txt": True
+}
 
 
 async def add_agent_tools():
     """Add tools for the agent."""
 
-    # Add the functions tool
-    # toolset.add(functions)
+    if ENABLED_INSTRUCTIONS["instructions_function_calling.txt"]:
+        # Add the functions tool
+        toolset.add(functions)
 
-    # Add the code interpreter tool
-    # code_interpreter = CodeInterpreterTool()
-    # toolset.add(code_interpreter)
+    if ENABLED_INSTRUCTIONS["instructions_code_interpreter.txt"]:
+        # Add the code interpreter tool
+        code_interpreter = CodeInterpreterTool()
+        toolset.add(code_interpreter)
 
     # Add the tents data sheet to a new vector data store
-    # vector_store = await utilities.create_vector_store(
-    #     project_client,
-    #     files=[TENTS_DATA_SHEET_FILE],
-    #     vector_name_name="Contoso Product Information Vector Store",
-    # )
-    # file_search_tool = FileSearchTool(vector_store_ids=[vector_store.id])
-    # toolset.add(file_search_tool)
+    if ENABLED_INSTRUCTIONS["instructions_file_search.txt"]:
+        vector_store = await utilities.create_vector_store(
+            project_client,
+            files=[TENTS_DATA_SHEET_FILE],
+            vector_name_name="Contoso Product Information Vector Store",
+        )
+        file_search_tool = FileSearchTool(vector_store_ids=[vector_store.id])
+        toolset.add(file_search_tool)
 
     # Add the Bing grounding tool
-    # bing_connection = await project_client.connections.get(connection_name=BING_CONNECTION_NAME)
-    # bing_grounding = BingGroundingTool(connection_id=bing_connection.id)
-    # toolset.add(bing_grounding)
+    if ENABLED_INSTRUCTIONS["instructions_bing_grounding.txt"]:
+        bing_connection = await project_client.connections.get(connection_name=BING_CONNECTION_NAME)
+        bing_grounding = BingGroundingTool(connection_id=bing_connection.id)
+        toolset.add(bing_grounding)
 
 
 async def initialize() -> tuple[Agent, AgentThread]:
@@ -90,13 +107,25 @@ async def initialize() -> tuple[Agent, AgentThread]:
 
     try:
         env = os.getenv("ENVIRONMENT", "local")
-        INSTRUCTIONS_FILE_PATH = f"{'src/workshop/' if env == 'container' else ''}{INSTRUCTIONS_FILE}"
-        
-        with open(INSTRUCTIONS_FILE_PATH, "r", encoding="utf-8", errors="ignore") as file:
-            instructions = file.read()
+
+        # Combine all enabled instruction files
+        combined_instructions = ""
+        for instruction_file in INSTRUCTION_FILES:
+            if ENABLED_INSTRUCTIONS[instruction_file]:
+                file_path = os.path.join(
+                    INSTRUCTIONS_FILE_ROOT_PATH, instruction_file)
+                try:
+                    with open(file_path, "r", encoding="utf-8", errors="ignore") as file:
+                        file_content = file.read()
+                        combined_instructions += f"\n\n--- Instructions from {instruction_file} ---\n\n"
+                        combined_instructions += file_content
+                except Exception as e:
+                    print(
+                        f"Could not load instruction file {instruction_file}: {str(e)}")
 
         # Replace the placeholder with the database schema string
-        instructions = instructions.replace("{database_schema_string}", database_schema_string)
+        instructions = combined_instructions.replace(
+            "{database_schema_string}", database_schema_string)
 
         print("Creating agent...")
         agent = await project_client.agents.create_agent(
@@ -117,7 +146,8 @@ async def initialize() -> tuple[Agent, AgentThread]:
 
     except Exception as e:
         logger.error("An error occurred initializing the agent: %s", str(e))
-        logger.error("Please ensure you've enabled an instructions file.")
+        logger.error(
+            "Please ensure you've enabled at least one instructions file.")
 
 
 async def cleanup(agent: Agent, thread: AgentThread) -> None:
@@ -139,7 +169,8 @@ async def post_message(thread_id: str, content: str, agent: Agent, thread: Agent
         stream = await project_client.agents.create_stream(
             thread_id=thread.id,
             assistant_id=agent.id,
-            event_handler=StreamEventHandler(functions=functions, project_client=project_client, utilities=utilities),
+            event_handler=StreamEventHandler(
+                functions=functions, project_client=project_client, utilities=utilities),
             max_completion_tokens=MAX_COMPLETION_TOKENS,
             max_prompt_tokens=MAX_PROMPT_TOKENS,
             temperature=TEMPERATURE,
@@ -150,7 +181,8 @@ async def post_message(thread_id: str, content: str, agent: Agent, thread: Agent
         async with stream as s:
             await s.until_done()
     except Exception as e:
-        utilities.log_msg_purple(f"An error occurred posting the message: {str(e)}")
+        utilities.log_msg_purple(
+            f"An error occurred posting the message: {str(e)}")
 
 
 async def main() -> None:
@@ -163,7 +195,8 @@ async def main() -> None:
     while True:
         # Get user input prompt in the terminal using a pretty shade of green
         print("\n")
-        prompt = input(f"{tc.GREEN}Enter your query (type exit to finish): {tc.RESET}")
+        prompt = input(
+            f"{tc.GREEN}Enter your query (type exit to finish): {tc.RESET}")
         if prompt.lower() == "exit":
             break
         if not prompt:
